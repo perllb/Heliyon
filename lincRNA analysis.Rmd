@@ -1,0 +1,311 @@
+---
+title: "lincRNA"
+output: pdf_document
+---
+
+#Load packages
+```{r}
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("DESeq2")
+library(DESeq2) 
+#install.packages("devtools")
+library(devtools)
+install_github(repo = "perllb/deseqAbstraction",username = "perllb")
+library(deseqAbstraction)
+```
+
+# Prepare the data
+```{r}
+## Load and prepare RNAseq data
+
+rm(list=ls())
+
+setwd("~/Dropbox (MN)/Jakobsson lab/Chimp study/Manuscript Protocol/RNA-seq_DG/")
+
+## read RNA data to merge files: FeatureCounts Exon quantification files
+h10 <- read.delim("hg38.s2.multi.Gencode27.Exon.sjdb.191007.txt", skip=1)
+H9h6 <- read.delim("hg38.s2.multi.Gencode27.Exon.sjdb.txt", skip=1)
+RNAdata <- cbind(h10, H9h6)
+write.table(RNAdata, "RNAdata_h6-h10-H9_merged.txt", sep="\t")
+
+#ProteinCoding
+inputCounts <- "RNAdata_h6-h10-H9_merged.txt"
+
+#Read RNA data
+rna.input <- read.delim(inputCounts,skip=0)
+head(rna.input)
+
+# Column 13-20 contain h10 data, columns 29-30, 32-33, 35-36, 38-39, 41-42, 44-45, 47-48, 50-51 contain H9 and h6 data
+rna.abund <- cbind(rna.input[,1:6], 
+                   rna.input[,13:20], rna.input[,29:30], rna.input[,32:33], 
+                   rna.input[,35:36], rna.input[,38:39], rna.input[,41:42],
+                   rna.input[,44:45], rna.input[,47:48], rna.input[,50:51])
+
+## FeatureCount raw file
+path <- inputCounts
+## Get the sampleFile name header
+header <- read.delim("rna.abund.txt", nrows = 1, skip=0, header = T)
+## Define sample names, by removing pre- and suffix 
+samples <- sub('.*\\_', '', names(header))
+
+#### Define metadata
+##### Note that 'condition' and 'samples' are needed here. Conditions define the design of DESeq object, 
+#defines what can be tested for and how the data is normalized.
+
+colDat <- read.delim(file = "Merged_MultiMapping_ColData.txt",sep="\t")
+cbind(colDat, samples[-c(1:6)])
+
+colDat$condition <- paste(colDat$time)
+
+```
+
+
+
+```{r}
+lincRNA.id <- read.table(file = "~/Dropbox (MN)/Jakobsson lab/Chimp study/Manuscript Protocol/RNA-seq_DG/gencode.lincRNA.v27.ID.txt")
+head(lincRNA.id)
+dim(lincRNA.id)
+
+header <- read.delim(file = path,header = F,nrows = 1)
+path.human <- "~/Dropbox (MN)/Jakobsson lab/Chimp study/Manuscript Protocol/RNA-seq_DG/rna.raw.human.allgenes.txt"
+write.table(rna.abund,file = "rna.raw.human.allgenes.txt",quote = F,row.names = F,col.names = T,sep="\t")  
+```
+
+
+
+```{r, echo=TRUE}
+
+dabs.human.RNA <- deseqAbs$new("Human-lincRNA",colData=colDat,filename=path.human,design = formula(~batch+condition)) 
+head(dabs.human.RNA$rawCounts)
+#dabs.human.RNA$makeVST(blind=F)
+#dabs.human.RNA.br <- limma::removeBatchEffect(assay(dabs.human.RNA$VST),batch = colDat$batch)
+
+dabs.human.RNA$makeDiffex()
+dabs.human.RNA$test$Default
+RNAcounts <- counts(dabs.human.RNA$deseq, normalized=T) 
+#head(RNAcounts)
+
+
+# Make list of normalized lincRNA counts
+#lincRNAcounts <- subset(RNAcounts, rownames(RNAcounts) %in% lincRNA.id$V1)
+#lincRNAtest <- subset(dabs.human.RNA$test$Default, rownames(dabs.human.RNA$test$Default) %in% lincRNA.id$V1)
+```
+
+
+## Heatgenes function
+```{r}
+# Heatgenes function
+heatGenes <- function (data, genes, a1 = NULL, a2 = NULL, n1 = NULL, n2 = NULL, 
+    sd = 0.001, z = FALSE, cluster_col = T, cluster_row = T, 
+    k = NA, cutreeR = 1, cutreeC = 1, redBlue = T, breaks = NA) 
+{
+    library(pheatmap)
+    library(graphics)
+    library(RColorBrewer)
+    if (!is.matrix(data) & !is.data.frame(data)) {
+        data <- assay(data)
+    }
+    if (!is.matrix(data) & !is.data.frame(data)) {
+        cat("ERROR: Data is not in correct format. Must be matrix or DESeq object")
+    }
+    else {
+        a1col <- c("#808000", "#FFD700", "#20B2AA", "#D2691E", 
+            "#BC8F8F", "#FFE4B5", "#BD1212", "#00008B")
+        a2col <- c("#FAEBD7", "#8B4513", "#B0C4DE", "#000080", 
+            "#6495ED", "#008080", "#00FF00", "#F0E68C")
+        heatCol <- ifelse(redBlue, yes = "RdBu", no = "RdYlBu")
+        if (!is.na(breaks[1])) {
+            heatScaleCol <- rev(colorRampPalette(brewer.pal(10, 
+                heatCol))(length(breaks)))
+        }
+        else {
+            heatScaleCol <- rev(colorRampPalette(brewer.pal(10, 
+                heatCol))(200))
+        }
+        genes.exp <- getGenes(data = data, genes = genes)
+        rownames(genes.exp) <- make.names(genes.exp[, 1], unique = T)
+        genes.exp <- genes.exp[, -1]
+        sd.exp <- apply(genes.exp, 1, sd)
+        plotData <- genes.exp[sd.exp > sd, ]
+        rowShow <- T
+        if (nrow(plotData) > 150) {
+            rowShow <- F
+        }
+        print(paste("There are ", nrow(plotData), " genes in you gene-set with sd > ", 
+            sd, ".", sep = ""))
+        scale <- "none"
+        if (z) {
+            scale <- "row"
+        }
+        if (!is.null(a1) & is.null(a2)) {
+            df <- data.frame(Var1 = factor(a1))
+            rownames(df) <- colnames(data)
+            colnames(df) <- n1
+            names(plotData) <- rownames(df)
+            mycolors <- a1col[1:length(unique(a1))]
+            names(mycolors) <- unique(a1)
+            mycolors <- list(a = mycolors)
+            names(mycolors) <- n1
+            pheatmap(plotData, annotation_col = df, breaks = breaks, 
+                annotation_colors = mycolors, border_color = NA, 
+                kmeans_k = k, cutree_rows = cutreeR, cutree_cols = cutreeC, 
+                cluster_rows = cluster_row, show_rownames = rowShow, 
+                cluster_cols = cluster_col, cluster_rows = cluster_row, 
+                scale = scale, color = heatScaleCol)
+        }
+        else if (!is.null(a1) & !is.null(a2)) {
+            df <- data.frame(Var1 = factor(a1), Var2 = factor(a2))
+            rownames(df) <- colnames(data)
+            colnames(df) <- c(n1, n2)
+            names(plotData) <- rownames(df)
+            mycolors <- a1col[1:length(unique(a1))]
+            names(mycolors) <- unique(a1)
+            mycolors2 <- a2col[1:length(unique(a2))]
+            names(mycolors2) <- unique(a2)
+            mycolors <- list(a = mycolors, b = mycolors2)
+            names(mycolors) <- c(n1, n2)
+            pheatmap(plotData, annotation_col = df, annotation_colors = mycolors, 
+                border_color = NA, kmeans_k = k, cutree_rows = cutreeR, 
+                cutree_cols = cutreeC, cluster_rows = cluster_row, 
+                show_rownames = rowShow, cluster_cols = cluster_col, 
+                scale = scale, color = heatScaleCol, breaks = breaks)
+        }
+        else if (!is.null(a2) & is.null(a1)) {
+            a1 <- a2
+            df <- data.frame(Var1 = factor(a1))
+            rownames(df) <- colnames(data)
+            colnames(df) <- n1
+            names(plotData) <- rownames(df)
+            mycolors <- a1col[1:length(unique(a1))]
+            names(mycolors) <- unique(a1)
+            mycolors <- list(a = mycolors)
+            names(mycolors) <- n1
+            pheatmap(plotData, annotation_col = df, annotation_colors = mycolors, 
+                border_color = NA, kmeans_k = k, cutree_rows = cutreeR, 
+                cutree_cols = cutreeC, cluster_rows = cluster_row, 
+                show_rownames = rowShow, cluster_cols = cluster_col, 
+                scale = scale, color = heatScaleCol, breaks = breaks)
+        }
+        else {
+            pheatmap(plotData, cluster_rows = cluster_row, show_rownames = rowShow, 
+                border_color = NA, kmeans_k = k, cutree_rows = cutreeR, 
+                cutree_cols = cutreeC, cluster_cols = cluster_col, 
+                scale = scale, color = heatScaleCol, breaks = breaks)
+        }
+        return(rownames(plotData))
+    }
+}
+```
+
+```{r}
+### DIFFEX lincRNAs
+
+diffex.lincRNA <- merge(lincRNA.id,data.frame(dabs.human.RNA$test$Default),by.x=1,by.y=0)
+
+#ma-plot p 0.05
+pdf(file = "Figures_lincRNA/maPlot_lincRNA.d16.d13.p05.pdf")
+maPlot(diffex.lincRNA,c1 = "d16",c2 = "d13",p = 0.05) 
+dev.off()
+
+#ma-plot p 0.001
+pdf(file = "Figures_lincRNA/maPlot_lincRNA.d16.d13.p001.pdf")
+maPlot(diffex.lincRNA,c1 = "d16",c2 = "d13",p = 0.001) 
+dev.off()
+
+#Make heatmaps for padj < 0.05
+sign.lincRNA.p05 <- getSign(x = diffex.lincRNA,p = 0.05) 
+sign.lincRNA.up.name.p05 <- sign.lincRNA.p05$up$V1
+sign.lincRNA.down.name.p05 <-sign.lincRNA.p05$down$V1
+
+colDatHeat <- colDat[c(1,5,9,17,10,18,2,6,11,19,12,20,3,7,13,21,14,22,4,8,15,23,16,24),]
+
+pdf(file = "Figures_lincRNA/heatMap_lincRNA.up.sd0.001.padj0.05.zScale.pdf",height = 11,width = 6)
+heatGenes(data = dabs.human.RNA$normCounts[,c(1,5,9,17,10,18,2,6,11,19,12,20,3,7,13,21,14,22,4,8,15,23,16,24)],genes = sign.lincRNA.up.name.p05, 
+           a1= colDatHeat$line,a2 =colDatHeat$condition,n1= "Line", n2= "Day",z=T, cluster_col = F, cluster_row = T)
+dev.off()
+
+pdf(file = "Figures_lincRNA/heatMap_lincRNA.down.sd0.001.padj0.05.zScale.pdf", height = 11, width = 6)
+heatGenes(data = dabs.human.RNA$normCounts[,c(1,5,9,10,17,18,2,6,11,12,19,20,3,7,13,14,21,22,4,8,15,16,23,24)],genes = sign.lincRNA.down.name.p05, 
+          a1= colDatHeat$line, a2 =colDatHeat$condition,n1= "Line", n2= "Day", z = T,cluster_col = F, cluster_row = T)
+dev.off()
+
+
+#Make heatmaps for padj < 0.001
+sign.lincRNA.p001 <- getSign(x = diffex.lincRNA,p = 0.001) 
+sign.lincRNA.up.name.p001 <- sign.lincRNA.p001$up$V1
+sign.lincRNA.down.name.p001 <-sign.lincRNA.p001$down$V1
+
+pdf(file = "Figures_lincRNA/heatMap_lincRNA.up.sd0.001.padj0.001.zScale.pdf",height = 11,width = 6)
+heatGenes(data = dabs.human.RNA$normCounts[,c(1,5,9,17,10,18,2,6,11,19,12,20,3,7,13,21,14,22,4,8,15,23,16,24)],genes = sign.lincRNA.up.name.p001, 
+           a1= colDatHeat$line,a2 =colDatHeat$condition,n1= "Line", n2= "Day",z=T, cluster_col = F, cluster_row = T)
+dev.off()
+
+pdf(file = "Figures_lincRNA/heatMap_lincRNA.down.sd0.001.padj0.001.zScale.pdf", height = 11, width = 6)
+heatGenes(data = dabs.human.RNA$normCounts[,c(1,5,9,10,17,18,2,6,11,12,19,20,3,7,13,14,21,22,4,8,15,16,23,24)],genes = sign.lincRNA.down.name.p001, 
+          a1= colDatHeat$line, a2 =colDatHeat$condition,n1= "Line", n2= "Day", z = T,cluster_col = F, cluster_row = T)
+dev.off()
+
+```
+
+
+#Make supplementary tables - up/down-regulated lincRNAs - p0.05
+```{r}
+## Get mean fpkm lncRNA sign
+dabs.human.RNA$makeFPKM()
+dabs.human.RNA$getAverageFPKM()
+up.fpkm.p05 <- getGenes(data = dabs.human.RNA$FPKMMean$Mean,genes = sign.lincRNA.up.name.p05)
+down.fpkm.p05 <- getGenes(data = dabs.human.RNA$FPKMMean$Mean,genes = sign.lincRNA.down.name.p05)
+
+write.table(x = up.fpkm.p05,file = "Figures_lincRNA/lincRNA.human.up.padj05.FPKM.mean.txt",quote = F,row.names = F)
+write.table(x = down.fpkm.p05,file = "Figures_lincRNA/lincRNA.human.down.padj05.FPKM.mean.txt",quote = F,row.names = F)
+
+## Get mean reads lncRNA sign
+dabs.human.RNA$getAverageReads()
+up.reads.p05 <- getGenes(data = dabs.human.RNA$baseMean$Mean,genes = sign.lincRNA.up.name.p05)
+down.reads.p05 <- getGenes(data = dabs.human.RNA$baseMean$Mean,genes = sign.lincRNA.down.name.p05)
+
+write.table(x = up.reads.p05,file = "Figures_lincRNA/lincRNA.human.up.padj05.baseMean.mean.txt",quote = F,row.names = F)
+write.table(x = down.reads.p05,file = "Figures_lincRNA/lincRNA.human.down.padj05.baseMean.mean.txt",quote = F,row.names = F)
+
+## get stats lncRNAsign
+up.stats.p05 <- getGenes(data = dabs.human.RNA$test$Default,genes = sign.lincRNA.up.name.p05)
+down.stats.p05 <- getGenes(data = dabs.human.RNA$test$Default,genes = sign.lincRNA.down.name.p05)
+
+merged.up.p05 <- merge(up.stats.p05[,-c(4,5,6)],up.reads.p05,by=1)
+merged.down.p05 <- merge(down.stats.p05[,-c(4,5,6)],down.reads.p05,by=1)
+
+write.table(x = merged.up.p05,file = "Figures_lincRNA/lincRNA.human.up.padj05.baseMean.stats.txt",quote = F,row.names = F)
+write.table(x = merged.down.p05,file = "Figures_lincRNA/lincRNA.human.down.padj05.baseMean.stats.txt",quote = F,row.names = F)
+
+```
+
+#Make supplementary tables - up/down-regulated lincRNAs - p0.001
+```{r}
+## Get mean fpkm lncRNA sign
+dabs.human.RNA$makeFPKM()
+dabs.human.RNA$getAverageFPKM()
+up.fpkm.p001 <- getGenes(data = dabs.human.RNA$FPKMMean$Mean,genes = sign.lincRNA.up.name.p001)
+down.fpkm.p001 <- getGenes(data = dabs.human.RNA$FPKMMean$Mean,genes = sign.lincRNA.down.name.p001)
+
+write.table(x = up.fpkm.p001,file = "Figures_lincRNA/lincRNA.human.up.padj001.FPKM.mean.txt",quote = F,row.names = F)
+write.table(x = down.fpkm.p001,file = "Figures_lincRNA/lincRNA.human.down.padj001.FPKM.mean.txt",quote = F,row.names = F)
+
+## Get mean reads lncRNA sign
+dabs.human.RNA$getAverageReads()
+up.reads.p001 <- getGenes(data = dabs.human.RNA$baseMean$Mean,genes = sign.lincRNA.up.name.p001)
+down.reads.p001 <- getGenes(data = dabs.human.RNA$baseMean$Mean,genes = sign.lincRNA.down.name.p001)
+
+write.table(x = up.reads.p001,file = "Figures_lincRNA/lincRNA.human.up.padj001.baseMean.mean.txt",quote = F,row.names = F)
+write.table(x = down.reads.p001,file = "Figures_lincRNA/lincRNA.human.down.padj001.baseMean.mean.txt",quote = F,row.names = F)
+
+## get stats lncRNAsign
+up.stats.p001 <- getGenes(data = dabs.human.RNA$test$Default,genes = sign.lincRNA.up.name.p001)
+down.stats.p001 <- getGenes(data = dabs.human.RNA$test$Default,genes = sign.lincRNA.down.name.p001)
+
+merged.up.p001 <- merge(up.stats.p001[,-c(4,5,6)],up.reads.p001,by=1)
+merged.down.p001 <- merge(down.stats.p001[,-c(4,5,6)],down.reads.p001,by=1)
+
+write.table(x = merged.up.p001,file = "Figures_lincRNA/lincRNA.human.up.padj001.baseMean.stats.txt",quote = F,row.names = F)
+write.table(x = merged.down.p001,file = "Figures_lincRNA/lincRNA.human.down.padj001.baseMean.stats.txt",quote = F,row.names = F)
+
+```

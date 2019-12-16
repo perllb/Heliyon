@@ -1,0 +1,326 @@
+---
+title: "RNA analysis protein-coding"
+output: html_document
+---
+
+## Load packages and prepare environment
+```{r}
+rm(list=ls())
+
+setwd("~/Dropbox (MN)/Jakobsson lab/Chimp study/Manuscript Protocol/RNA-seq_DG/")
+
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("DESeq2")
+library(DESeq2) 
+#install.packages("devtools")
+library(devtools)
+install_github(repo = "perllb/deseqAbstraction",username = "perllb")
+library(deseqAbstraction)
+library(limma)
+```
+
+## Prepare the data
+```{r}
+## read RNA data to merge files: FeatureCounts Exon quantification files
+h10 <- read.delim("hg38.s2.multi.Gencode27.Exon.sjdb.191007.txt", skip=1)
+H9h6 <- read.delim("hg38.s2.multi.Gencode27.Exon.sjdb.txt", skip=1)
+RNAdata <- cbind(h10, H9h6)
+write.table(RNAdata, "RNAdata_h6-h10-H9_merged.txt", sep="\t")
+
+#Assign data file to a value
+inputCounts <- "RNAdata_h6-h10-H9_merged.txt"
+
+#Read RNA data
+rna.input <- read.delim(inputCounts,skip=0)
+head(rna.input)
+
+# Column 13-20 contain h10 data, columns 29-30, 32-33, 35-36, 38-39, 41-42, 
+# 44-45, 47-48, 50-51 contain H9 and h6 data
+rna.abund <- cbind(rna.input[,1:6], 
+                   rna.input[,13:20], rna.input[,29:30], rna.input[,32:33], 
+                   rna.input[,35:36], rna.input[,38:39], rna.input[,41:42],
+                   rna.input[,44:45], rna.input[,47:48], rna.input[,50:51])
+
+#View(rna.abund)
+write.table(rna.abund, "rna.abund.txt", sep="\t",col.names = T, row.names = F)
+## FeatureCount raw file
+path <- inputCounts
+## Get the sampleFile name header
+header <- read.delim("rna.abund.txt", nrows = 1, skip=0, header = T)
+## Define sample names, by removing pre- and suffix 
+samples <- sub('.*\\_', '', names(header))
+
+#### Define metadata
+##### Note that 'condition' and 'samples' are needed here. Conditions define the design of 
+# DESeq object, defines what can be tested for and how the data is normalized.
+
+colDat <- read.delim(file = "Merged_MultiMapping_ColData.txt",sep="\t")
+cbind(colDat, samples[-c(1:6)])
+
+
+colDat$condition <- paste(colDat$time)
+
+```
+
+## Deseq abstraction analysis
+```{r}
+dabs.human <- deseqAbs$new("Human",colData=colDat,filename="rna.abund.txt",design = formula(~batch+condition))
+head(dabs.human$rawCounts)
+dabs.human$makeVST(blind=F)
+dabs.human.vst.br <- limma::removeBatchEffect(assay(dabs.human$VST),batch = colDat$batch)
+dim(dabs.human.vst.br)
+dabs.human$makeVST(blind=F)
+dabs.human$makeDiffex()
+dabs.human$test$Default
+```
+
+## Write tables of normalized counts
+```{r}
+## write normalized counts
+write.table(x = dabs.human$normCounts,file = "Figures/normalizedCounts.txt",quote = F,sep="\t")
+
+## get expressed
+expressed <- dabs.human$normCounts
+expressed <- expressed[rowMeans(expressed)>2,]
+head(expressed,20)
+write.table(x = rownames(expressed),file = "Figures/Expressed.genes.mean2.txt",quote = F,sep = "\t",row.names = F,col.names = F)
+```
+
+
+# Plot heatmap of markers 
+```{r}
+plotMarkers <- function(data,markers,colData,myColors=NULL,heatCol = "RdBu") {
+  
+  
+  #order  markdat by molecule -> species -> line
+  ordr <- order(colData$line,colData$time)
+  
+  mark.dat <- data[rownames(data) %in% markers,]
+  notin <- setdiff(markers,rownames(mark.dat))
+  idx <- nrow(mark.dat)+1
+  
+  mark.dat <- mark.dat[,ordr]
+  
+  #View(mark.dat)
+  
+  annot <- colData[ordr,rev(c(1,4,2))]
+  annot
+  myColors
+  colnames(mark.dat) <- make.names(colnames(mark.dat),unique = T)
+  rownames(annot) <- colnames(mark.dat)
+  
+  
+  library(pheatmap)
+  library(RColorBrewer)
+  
+  if(!is.null(myColors)) {
+    return(pheatmap(mark.dat,annotation_col = annot,annotation_colors = myColors,color = rev(colorRampPalette(brewer.pal(10,heatCol))(200)),cluster_cols = F,cutree_cols = 2,fontsize_col = 5))
+  }else{
+    return(pheatmap(mark.dat,annotation_col = annot,color = rev(colorRampPalette(brewer.pal(10,heatCol))(200)),cluster_cols = F,cutree_cols = 2,fontsize_col = 5))
+  }
+}
+
+
+##### Plot all human #
+# Set annotation colors 
+# time
+a3col <- c("grey100","grey75","grey50","grey25")
+
+mycolors3 <- a3col
+names(mycolors3) <- c("d13","d14","d15","d16")
+
+# Define marker groups
+Pluripotency <- data.frame(Genes=c("NANOG","POU5F1","KLF4","MYC","LIN28A"),Group="Pluripotency")
+Forebrain <- data.frame(Genes=c("FOXG1","PAX6","EMX2","OTX2", "NKX2-1","DLX2"),Group="Forebrain")
+Midbrain <-  data.frame(Genes=c("OTX1","EN1","LMX1A","CORIN","FOXA2","PAX8"),Group="Midbrain / Hindbrain")
+Hindbrain <-  data.frame(Genes=c("HOXA2"),Group="Midbrain / Hindbrain")
+NeuralLineage <- data.frame(Genes=c("SOX2","TUBB","DCX","TBR1","EOMES","CUX2","OLIG2","GFAP","EMX1"),Group="Neural Lineage")
+
+fix.mat.marker = function(markers) {
+  
+  mat <- merge(x = markers,y = dabs.human.vst.br,by.x=1,by.y=0,sort=F)
+  rownames(mat) <- mat$x
+  mat <- mat[,-1]
+  
+  notIn <- setdiff(markers,rownames(mat))
+  for(gene in notIn){
+    
+    mat[gene,] <- rep(min(dabs.human.vst.br),ncol(dabs.human.vst.br))  
+  }
+  return(mat)
+  
+}
+
+plurip.dat <- fix.mat.marker(as.character(Pluripotency$Genes))
+prog.dat <- fix.mat.marker(as.character(NeuralLineage$Genes))
+forebrain.dat <- fix.mat.marker(as.character(Forebrain$Genes))
+midbrain.dat <- fix.mat.marker(as.character(Midbrain$Genes))
+hindbrain.dat   <- fix.mat.marker(as.character(Hindbrain$Genes))
+
+mark.dat <- rbind(plurip.dat,forebrain.dat,midbrain.dat,hindbrain.dat,prog.dat)
+allMarkers <- rbind(Pluripotency,Forebrain,Midbrain,Hindbrain,NeuralLineage)
+rownames(allMarkers) <- allMarkers$Genes
+
+#order  markdat by molecule -> species -> line
+ordr <- order(colDat$line,colDat$time)
+
+mark.dat <- mark.dat[,ordr]
+head(mark.dat)
+
+#View(mark.dat)
+library(RColorBrewer)
+col_markersGr <- colorRampPalette(brewer.pal(length(unique(allMarkers$Group)),"Set2"))(length(unique(allMarkers$Group)))
+names(col_markersGr) <- unique(allMarkers$Group)
+
+myColors <- list(time=mycolors3,Group=col_markersGr)
+myColors
+annot <- colDat[ordr,rev(c(1,4,2))]
+annot
+colnames(mark.dat) <- make.names(colnames(mark.dat),unique = T)
+rownames(annot) <- colnames(mark.dat)
+
+annot.row <- data.frame(allMarkers$Group)
+rownames(annot.row) <- allMarkers$Genes
+colnames(annot.row) <- "Group"
+
+library(pheatmap)
+
+gaps <- which(duplicated(annot.row$Group) == F)-1
+
+pdf(file = "Figures/human_markers.pdf",width = 5,height = 8)
+pheatmap(mark.dat,annotation_col = annot,annotation_row = annot.row,cluster_rows = F,
+         annotation_colors = myColors,color = rev(colorRampPalette(brewer.pal(10,"RdBu"))(200)),
+         cluster_cols = F,fontsize_col = 5, cutree_cols = 2, gaps_row = gaps,show_colnames = F)
+dev.off()
+
+```
+
+# Plot dynamic expression of markers
+```{r}
+library(ggplot2)
+library(reshape2)
+
+dabs.human$makeFPKM()
+cond.b <- paste(colDat$line,colDat$time,colDat$batch,sep = "_")
+colnames(dabs.human$FPKM) <- cond.b
+melted <- melt(data = dabs.human$FPKM)
+head(melted)
+
+times <- read.table(text = as.character(melted$Var2), sep = "_", as.is = TRUE)$V3
+melted$time <- times
+
+lines <- read.table(text = as.character(melted$Var2), sep = "_", as.is = TRUE)$V2
+melted$line <- lines
+
+batches <- read.table(text = as.character(melted$Var2), sep = "_", as.is = TRUE)$V5
+melted$batch <- paste("b",batches,sep = "")
+
+head(melted)
+
+#### Plot function
+plotGeom <- function(gene,es=T) {
+  
+  curr <- melted[melted$Var1==gene,]
+  ifelse(test = es,yes = curr.2 <- curr[curr$line!="CPT" & curr$line!="H48",],no = curr.2 <- curr[curr$line!="CPT" & curr$line!="H48",])  
+  curr.3 <- curr[curr$line=="CPT" | curr$line=="H48",]
+  
+  ggplot(data = curr.2,mapping = aes(x = time,y = value,col = line)) +
+    geom_point(shape=15,size=2) +                                    
+    geom_smooth(aes(group=line),se=F,method = "loess") +
+    ggtitle(label = gene) +
+    ylab(label = "FPKM") +
+    scale_color_manual(values=c("#008E51","#005492","#931100")) +           
+    theme_bw() + 
+    theme(text=element_text(family = "Helvetica", face="plain", size=12))    
+  
+}
+
+## Multiplot function
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+## Plot
+pdf(file = "Figures/Marker.Dynamics_LIN28A.NEUROD1.SYP.pdf",width = 5,height = 12)
+p1 <- plotGeom("LIN28A", es = T)
+p2 <- plotGeom("NEUROD1",es = T)
+#p3 <- plotGeom("ASCL1",es = F)
+p4 <- plotGeom("SYP",es = T)
+multiplot(p1,p2,p4,cols=1)
+dev.off()
+```
+
+# ma-plot
+```{r}
+pdf(file = "Figures/maPlot_d16.d13_1e-4.logfc1.pdf")
+maPlot(test = dabs.human$test$Default, p = 1e-4,l = 1,c1 = "D16",c2 = "D13") 
+dev.off()
+```
+
+# Make lists of up/down-regulated genes
+```{r}
+rna.up <- getSign(x = dabs.human$test$Default,p = 1e-4,l = 1)$up
+rna.down <- getSign(x = dabs.human$test$Default,p = 1e-4,l = 1)$down
+
+write.table(x = rna.up,file = "Figures/diffex_d16.vs.d13_up.d16.txt",quote = F,sep = "\t",row.names = T,col.names = T)
+write.table(x = rna.down,file = "Figures/diffex_d16.vs.d13_down.d16.txt",quote = F,sep = "\t",row.names = T,col.names = T)
+
+## Get mean reads - sign
+rna.up <- getSign(x = dabs.human$test$Default,p = 1e-4,l = 1)$up
+rna.down <- getSign(x = dabs.human$test$Default,p = 1e-4,l = 1)$down
+
+rna.up <- rna.up[order(rna.up$padj),][1:50,]
+rna.down <- rna.down[order(rna.down$padj),][1:50,]
+
+dim(rna.up)
+dim(rna.down)
+
+dabs.human$getAverageReads()
+up.reads <- getGenes(data = dabs.human$baseMean$Mean,genes = rownames(rna.up))
+down.reads <- getGenes(data = dabs.human$baseMean$Mean,genes = rownames(rna.down))
+
+write.table(x = up.reads,file = "Figures/ProteinCoding.human.up.top50.baseMean.mean.txt",quote = F,row.names = F)
+write.table(x = down.reads,file = "Figures/ProteinCoding.human.down.top50.baseMean.mean.txt",quote = F,row.names = F)
+
+## get stats - sign
+up.stats <- getGenes(data = dabs.human$test$Default,genes = rownames(rna.up))
+down.stats <- getGenes(data = dabs.human$test$Default,genes = rownames(rna.down))
+
+merged.up <- merge(up.stats[,-c(4,5,6)],up.reads,by=1)
+merged.down <- merge(down.stats[,-c(4,5,6)],down.reads,by=1)
+
+write.table(x = merged.up,file = "Figures/ProteinCoding.human.up.top50.baseMean.stats.txt",quote = F,row.names = F)
+write.table(x = merged.down,file = "Figures/ProteinCoding.human.down.top50.baseMean.stats.txt",quote = F,row.names = F)
+```
